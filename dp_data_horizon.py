@@ -1,5 +1,25 @@
 from math import ceil, floor
 import bisect
+def bis_left(nums, k):
+    i, j = 0, len(nums)
+    while i < j:
+        mid = i + ((j-i) >> 1)
+        if nums[mid]._x >= k:
+            j = mid
+        else:
+            i = mid+1
+    return i
+
+def bis_right(nums, k):
+    i, j = 0, len(nums)
+    while i < j:
+        mid = i + ((j-i) >> 1)
+        if nums[mid]._x <= k:
+            i = mid+1
+        else:
+            j = mid
+    return i
+
 
 class Region:  
     def __init__(self,lx,ly,hx,hy):
@@ -49,6 +69,7 @@ class Cell:
         self._y = -1
         self._hx = -1
         self._hy = -1
+        self.seg = []
         # index in framework structure
         self.id = -1
         # index in DP structure
@@ -56,10 +77,19 @@ class Cell:
         # in unit of sites
         self.w = w
         self.h = h
+        # cell type
+        self.type = 0
         # 0 if no overlap
         self.overlap = 0
         # true if placed
         self.placed = False
+        # temp data for MLL
+        self.mll_ox = 0
+        self.mll_oy = 0
+        self.mll_x = 0
+        self.mll_y = 0
+        self.mll_fixed = False
+        self.isAbacus = False
         ##########
     @property
     def area(self):
@@ -123,23 +153,25 @@ class Segment:
         self.y = y
         self.w = w
         self.cells = list()
-        self.id2index_map = dict()
         self.ncells = 0
         pass
 
     def getCellsAt(self,lx,hx):
         if self.ncells == 0:
-            return []
+            return ([],0,0)
         result = []
-        indexs = [cell._x for cell in self.cells]
-        s=bisect.bisect_left(indexs,lx)
-        e=bisect.bisect_left(indexs,hx)
+        #indexs = [cell._x for cell in self.cells]
+        #s=bisect.bisect_left(indexs,lx)
+        s = bis_left(self.cells,lx)
+        #e=bisect.bisect_left(indexs,hx)
+        e = bis_left(self.cells,hx)
+        #print(lx,hx,s,e,self.indexs)
         for i in range(s,e):
             result.append(self.cells[i])
         '''for cell in self.cells:
             if hx>cell.lx() and cell.hx() >lx:
                 result.append(cell)'''
-        return result
+        return (result,s,e)
 
     def getCellAt(self,x, y):
         if self.ncells == 0:
@@ -190,17 +222,21 @@ class Segment:
             return self.ncells    
 
     def addCell(self,cell):
-
-        indexs = [cell._x for cell in self.cells]
-        self.cells.insert(bisect.bisect_left(indexs,cell._x),cell)
+        #index = self.getCellAt(cell.lx(),cell.ly())
+        #self.cells.insert(index,cell)
+        #self.cells.append(cell)
+        #indexs = [cell._x for cell in self.cells]
+        pos = bis_left(self.cells,cell._x)
+        self.cells.insert(pos,cell)
+        #self.cells.insert(bisect.bisect_left(indexs,cell._x),cell)
         self.ncells+=1
-        
+        cell.seg.append(self.i)
         pass
 
 class LocalRegion:
     def __init__(self):
         self.localCells = list()
-        self.id2index_map = dict()
+        #self.id2index_map = dict()
         self._ncells = 0
         self.localSegments_h = list()
         self.lx = 0
@@ -211,9 +247,27 @@ class LocalRegion:
 
     def nCells(self):
         return self._ncells
-    
+
     def addLocalCell(self,cell):
-        localCell = LocalCell(cell,self._ncells)
+        lx = cell.lx()
+        ly = cell.ly()
+        hx = cell.hx()
+        hy = cell.hy()
+        fixed = False
+        if lx < self.lx:
+            lx = self.lx
+            fixed = True
+        if ly < self.ly:
+            ly = self.ly
+            fixed = True
+        if hx > self.hx:
+            hx = self.hx
+            fixed = True
+        if hy > self.hy:
+            hy = self.hy
+            fixed = True
+        localCell = LocalCell(cell,self._ncells,lx,ly,hx,hy,fixed)
+        '''localCell = LocalCell(cell,self._ncells)
         lx = localCell.lx
         ly = localCell.ly
         hx = localCell.hx
@@ -229,9 +283,10 @@ class LocalRegion:
             localCell.fixed = True
         if hy > self.hy:
             hy = self.hy
-            localCell.fixed = True
+            localCell.fixed = True'''
+        #localCell.setFixed(lx,ly,hx,hy)
         self.localCells.append(localCell)
-        self.id2index_map[localCell.cell.i] = self._ncells
+        #self.id2index_map[localCell.cell.i] = self._ncells
         self._ncells+=1
         return localCell.w*localCell.h
     
@@ -251,8 +306,11 @@ class LocalRegion:
         for i in range(len(line_list)-1):
             seg = LocalSegment(line_l=line_list[i],line_u = line_list[i+1],w = seg_w)
             seg.x = self.lx
+            #seg.y = line_list[i]#self.ly + sum_seg_h
+            #sum_seg_h += seg.h
             localSegments_h.append(seg)
             line2seg[line_list[i]] = i
+        #localCells_h = sorted(self.localCells,key = lambda x:x.lx)
         for localCell in self.localCells:
             start = line2seg[cell2line[localCell.i]]
             self.localCells[localCell.i].h_start_r = line2seg[localCell.ly]
@@ -404,6 +462,7 @@ class LocalRegion:
                             finished = False
                             rb = posL[cellR.i] - lW
                             posL[cellL.i] = rb
+                    #assert(posL[cellL.i] == -1 or posL[cellL.i] >= lx)
         pass
 
     def estimateR(self,posR,intervals,insertionPoint,targetX,targetCell):
@@ -423,6 +482,7 @@ class LocalRegion:
             for segment in self.localSegments_h:
                 for i in range(1,segment.ncells):
                     if (posR[segment.localCells[i - 1]] < 0):
+                        #left cell is not moved
                         continue
                     cellR = self.localCells[segment.localCells[i]]
                     cellL = self.localCells[segment.localCells[i - 1]]
@@ -441,6 +501,7 @@ class LocalRegion:
                             finished = False
                             lb = posR[cellL.i] + lW
                             posR[cellR.i] = lb
+                    #assert(posR[cellR.i] == -1 or posR[cellR.i] + cellR.w <= hx)
 
     def estimateH(self,posL, posR, intervals_h, insertionPoint, targetX, targetCell):
         self.estimateL(posL, intervals_h, insertionPoint, targetX, targetCell)
@@ -477,6 +538,7 @@ class LocalRegion:
                             finished = False
                             rb = posL[cellR.i] - lW
                             posL[cellL.i] = rb
+                    #assert(posL[cellL.i] == -1 or posL[cellL.i] >= lx)
                     if posL[cellL.i] != -1 and posL[cellL.i] < self.lx:
                         print('error!!')
                         return False
@@ -497,6 +559,7 @@ class LocalRegion:
             for segment in self.localSegments_h:
                 for i in range(1,segment.ncells):
                     if (posR[segment.localCells[i - 1]] < 0):
+                        #left cell is not moved
                         continue
                     cellR = self.localCells[segment.localCells[i]]
                     cellL = self.localCells[segment.localCells[i - 1]]
@@ -515,6 +578,7 @@ class LocalRegion:
                             finished = False
                             lb = posR[cellL.i] + lW
                             posR[cellR.i] = lb
+                    #assert(posR[cellR.i] == -1 or posR[cellR.i] + cellR.w <= hx)
                     if posR[cellR.i] != -1 and posR[cellR.i] + cellR.w > self.hx:
                         print('error!!')
                         return False
@@ -580,6 +644,7 @@ class LocalRegion:
                         if not cellR.fixed and posR[cellR.i] + cellR.w > self.hx:
                             print('spreadRerror',posR[cellR.i])
                             return False
+                        #assert(posR[cellR.i] + cellR->w <= hx)
         return True
 
 class LocalSegment:
@@ -622,6 +687,40 @@ class LocalCell:
         self.h_end_r = 0
         pass
     
+    def __init__(self,cell,i,lx,ly,hx,hy,fixed):
+        self.cell = cell
+        self._ox = cell.ox()
+        self._oy = cell.oy()
+        self.lx = lx
+        self.ly = ly
+        self.hx = hx
+        self.hy = hy
+        self.fixed = fixed
+        self.w = hx-lx
+        self.h = hy-ly
+        self.i = i
+        self.h_nsegs = 0
+        self.v_nsegs = 0
+        self.h_start_r = 0
+        self.h_end_r = 0
+    
+    '''def __init__(self,cell,i,X=-1,Y=-1):
+        self.cell = cell
+        self._ox = cell.ox()
+        self._oy = cell.oy()
+        self.lx = cell.lx() if X==-1 else X
+        self.ly = cell.ly() if Y==-1 else Y
+        self.hx = self.lx+cell.w
+        self.hy = self.ly+cell.h
+        self.fixed = False
+        self.w = cell.w
+        self.h = cell.h
+        self.i = i
+        self.h_nsegs = 0
+        self.v_nsegs = 0
+        self.h_start_r = 0
+        self.v_start_r = 0
+        pass'''
 
     def ox(self):
         return self._ox
@@ -718,11 +817,12 @@ class Move:
         self.x = tx
         self.y = ty
         self.legals = list()
-        self.id2index_map = None
+        self.no_moves = list()
+        '''self.id2index_map = None
         pass
 
     def setCellMoveMap(self,id2index_map):
-        self.id2index_map = id2index_map
+        self.id2index_map = id2index_map'''
 
 class CellMove:
     def __init__(self,cell,x,y):
